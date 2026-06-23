@@ -24,3 +24,5 @@ app.get('/ready', (req, res) => {
 app.listen(PORT, () => {
   console.log(`App running on port ${PORT} | Version: ${VERSION} | Env: ${ENV}`);
 });
+console.log("v2!")
+console.log("v2!")

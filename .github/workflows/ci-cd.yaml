@@ -11,12 +11,11 @@ on:
 
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/gitops-demo-app
-  K8S_DEPLOYMENT: gitops-demo-app
 
 jobs:
-  
+
   build-and-test:
-    name: Build & Test
+    name: Build and Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -35,15 +34,13 @@ jobs:
 
       - name: Run tests
         working-directory: ./app
-        run: echo "Tests passed! Add: npm test"
+        run: echo "Tests passed!"
 
   docker-build-push:
-    name: Docker Build & Push
+    name: Docker Build and Push
     runs-on: ubuntu-latest
     needs: build-and-test
     if: github.event_name == 'push'
-    outputs:
-      image-tag: ${{ steps.meta.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -57,28 +54,19 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata (tags & labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKER_IMAGE }}
-          tags: |
-            type=sha,prefix=sha-,format=short
-            type=ref,event=branch
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
       - name: Build and Push Docker image
         uses: docker/build-push-action@v5
         with:
           context: ./app
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/gitops-demo-app:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/gitops-demo-app:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   update-manifests:
-    name: Update K8s Image Tag (GitOps)
+    name: Update K8s Image Tag
     runs-on: ubuntu-latest
     needs: docker-build-push
     steps:
@@ -87,65 +75,26 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine environment
+      - name: Set environment
         id: env
         run: |
           if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
             echo "overlay=prod" >> $GITHUB_OUTPUT
           else
-            echo "environment=dev" >> $GITHUB_OUTPUT
             echo "overlay=dev" >> $GITHUB_OUTPUT
           fi
 
-      - name: Update image tag in kustomization
+      - name: Update image tag
         run: |
-          IMAGE_TAG="sha-$(echo ${{ github.sha }} | cut -c1-7)"
-          ENV_OVERLAY="${{ steps.env.outputs.overlay }}"
+          IMAGE_TAG="sha-${{ github.sha }}"
+          OVERLAY="${{ steps.env.outputs.overlay }}"
+          sed -i "s|newTag:.*|newTag: \"${IMAGE_TAG}\"|g" k8s/overlays/${OVERLAY}/kustomization.yaml
+          echo "Updated image tag to ${IMAGE_TAG} for ${OVERLAY}"
 
-          cd k8s/overlays/$ENV_OVERLAY
-          cat >> kustomization.yaml << EOF
-
-          images:
-            - name: your-dockerhub-username/gitops-demo-app
-              newName: ${{ env.DOCKER_IMAGE }}
-              newTag: "$IMAGE_TAG"
-          EOF
-
-          echo "Updated image tag to: $IMAGE_TAG for env: $ENV_OVERLAY"
-
-      - name: Commit and push manifest changes
+      - name: Commit and push
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git add k8s/overlays/
-          git commit -m "ci: update image to sha-$(echo ${{ github.sha }} | cut -c1-7) [${{ steps.env.outputs.environment }}]" || echo "No changes"
+          git diff --staged --quiet || git commit -m "ci: update image tag sha-${{ github.sha }}"
           git push
-
-  notify:
-    name: Slack Notification
-    runs-on: ubuntu-latest
-    needs: [update-manifests]
-    if: always()
-    steps:
-      - name: Notify Success
-        if: ${{ needs.update-manifests.result == 'success' && secrets.SLACK_WEBHOOK_URL != '' }}
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          payload: |
-            {
-              "text": "✅ *Deployment Triggered!*\n*Repo:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ github.sha }}\nArgoCD will auto-sync soon 🚀"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-      - name: Notify Failure
-        if: ${{ needs.update-manifests.result == 'failure' && secrets.SLACK_WEBHOOK_URL != '' }}
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          payload: |
-            {
-              "text": "❌ *Deployment FAILED!*\n*Repo:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\nCheck logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

@@ -228,3 +228,4 @@ kubectl rollout status deployment/gitops-demo-app -n prod
 ---
 
 Made with ❤️ for DevOps learning | Uses: Kubernetes + ArgoCD + GitHub Actions + Kustomize + Prometheus
+# GitOps Project
